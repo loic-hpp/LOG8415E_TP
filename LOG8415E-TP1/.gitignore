@@ -1,0 +1,40 @@
+# LaTeX intermediate and output files
+*.aux
+*.bbl
+*.blg
+*.brf
+*.fls
+*.fdb_latexmk
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.synctex.gz
+*.nav
+*.snm
+*.vrb
+*.xdv
+
+# Editor/IDE files
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# VS Code settings
+.vscode/
+
+#python environment
+venv
+
+# node package
+node_modules
+package-lock.json
+
+# Key files
+*.pem

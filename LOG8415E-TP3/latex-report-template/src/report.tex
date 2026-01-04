@@ -1,0 +1,219 @@
+\documentclass[a4paper,11pt]{report}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{geometry}
+\geometry{margin=1in}
+\usepackage{pdflscape}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\usepackage{listings}
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true
+}
+
+\usepackage{titling}
+\pretitle{%
+    \begin{center}
+    \includegraphics[width=0.7\textwidth]{images/Logo_Polytechnique_Montréal.png}\\[\bigskipamount]
+    \vspace*{1cm}
+}
+\posttitle{\end{center}}
+\title{
+\Large LOG8415E -- Advanced Concepts of Cloud Computing\\[1.5ex]
+\large Final Assignment\\[1.5ex]
+\large \textbf{Cloud Design Patterns: Implementing a DB Cluster}
+\vspace*{2cm}
+}
+\author{
+Loic Nguemegne Temena - 2180845
+\vspace*{1cm}\\[2ex]
+\vspace*{0.25cm}
+Submitted to\\
+Vahid Majdinasab
+\vspace*{4cm}
+}
+\date{Fall 2025 -- 16 december 2025}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+
+\chapter{Benchmarking MySQL with sysbench}
+Sysbench is a tool design for simulating realistic MySQL workloads. It can be used to 
+benchmark and stress test MySQL databases by generating a variety of workloads, 
+including read-only, write-only, and mixed read/write operations. 
+Sysbench allows users to configure various parameters such as the number of threads, 
+the size of the database, and the type of workload to simulate different scenarios 
+and measure performance metrics like transactions per second (TPS), latency, and throughput.
+In this assignment we use it to benchmark our database by running the following command:
+\begin{lstlisting}[language=bash, frame=single]
+sudo sysbench /usr/share/sysbench/oltp_read_only.lua --mysql-db=sakila --mysql-user="$MYSQL_USER" --mysql-password="$MYSQL_PASSWORD" prepare
+sudo sysbench /usr/share/sysbench/oltp_read_only.lua --mysql-db=sakila --mysql-user="$MYSQL_USER" --mysql-password="$MYSQL_PASSWORD" run
+sudo sysbench /usr/share/sysbench/oltp_read_only.lua --mysql-db=sakila --mysql-user="$MYSQL_USER" --mysql-password="$MYSQL_PASSWORD" cleanup
+\end{lstlisting}
+In figure~\ref{fig:sysbench_results}, we can see the benchmark results with a low latency of 
+\textbf{1.90} ms and a throughput of \textbf{524.18} transactions per second (TPS) on average.
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\textwidth]{images/Sysbenc_results.png}
+    \caption{Sysbench results.}
+    \label{fig:sysbench_results}
+\end{figure}
+\thispagestyle{fancy}
+\chapter{Implementation of The Proxy pattern}
+The proxy is running on an EC2 instance called \texttt{Proxy} in our architecture. 
+It is located in the private subnet, it only accept request from the public subnet \textbf{10.0.0.0/16}
+and is responsible for routing the incoming database queries to the appropriate database instance 
+(master or worker) based on the type of query (read or write). The proxy uses FastAPI\cite{fastapi2021} to 
+handle incoming HTTP requests and forwards them to the correct database instance using the 
+\texttt{requests} library. the request is extract from the json payload by getting value of the key \textbf{"query"}. There are 3 routes defined in the proxy:
+\begin{itemize}
+    \item \textbf{/directHit}: All requests are forwarded to the master database instance.
+    \item \textbf{/randomHit}: Write queries are forwarded to the master database instance,
+    while read queries are forwarded to a randomly selected worker database instance or the master.
+    \item \textbf{/customHit}: Write queries are forwarded to the master database instance,
+    while read queries are forwarded to the worker database instance with the lowest average response time.
+    A thread ping each worker every 100 ms to measure their response time.
+\end{itemize}
+Each route call the 2 following functions:
+\begin{lstlisting}[language=python, frame=single]
+def connect_to_db(host: str):
+    return pymysql.connect(
+        host=host,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database="sakila",
+        ssl_disabled=True,
+    )
+
+def execute_query_on_worker(worker_ip: str, query: str):
+    mysql_conn = connect_to_db(worker_ip)
+    cursor = mysql_conn.cursor()
+    cursor.execute(query)
+    results = cursor.fetchall()
+    if query.startswith(("UPDATE", "update", "INSERT", "insert")):
+        mysql_conn.commit()
+        results = "Update query executed successfully"
+    cursor.close()
+    mysql_conn.close()
+    return results
+\end{lstlisting}
+\chapter{Implementation of The Gatekeeper pattern}
+The gatekeeper is running on an EC2 instance called \texttt{Gatekeeper} in our architecture. 
+It is located in the public subnet, it accepts request from the internet and has the following responsibilities:
+\begin{itemize}
+    \item \textbf{Authenticate} Authenticate incoming requests to ensure they are from trusted sources. Authentication is 
+    performed by checking the key \texttt{auth\_key}, which must have the value \texttt{tp3-log8415e}. 
+    If authentication fails, the gatekeeper returns a \texttt{401 Unauthorized} response.
+    
+    \item \textbf{Confirm the query presence} Validate that incoming requests contain a query. 
+    The query is extracted from the JSON payload by retrieving the value of the key \texttt{query}. 
+    If the query is missing, the gatekeeper returns a \texttt{400 Bad Request} response.
+
+    \item \textbf{Block malicious queries} Prevent potentially harmful queries from reaching the database.
+    The gatekeeper checks if the query contains any of the following keywords: \texttt{DROP}, \texttt{DELETE}, \texttt{ALTER}, \texttt{TRUNCATE}. 
+    If any of these keywords are found in the query, the gatekeeper returns a \texttt{403 Forbidden} response.
+    The only request accepted are read and write queries (\texttt{SELECT}, \texttt{INSERT}, \texttt{UPDATE}).
+    
+    \item \textbf{Forward requests} Forward authenticated requests to the proxy server located in the private subnet.
+    All the route will call the function \texttt{handle\_hit} to handle the requests.
+\end{itemize}
+
+
+\chapter{Benchmarking the cluster}
+The benchmarking of the implemented database cluster is performed via the file \texttt{benchmark.py}.
+to use the script you need to provide the public ip address of the gatekeeper server as argument and 
+run the following command:
+\begin{lstlisting}[language=bash, frame=single]
+python benchmark.py GATEKEEPER_PUBLIC_IP
+\end{lstlisting}
+The script will send a total of 2000 requests (1000 read and 1000 write) to the gatekeeper server, 
+for each of the 3 routes (\texttt{directHit}, \texttt{randomHit}, \texttt{customHit}),
+measuring the response time for each request and calculating the average response time for read and write operations separately.
+To perform the requests asynchronously, the script uses the \texttt{aiohttp} and \texttt{asyncio} libraries.
+The results of the benchmarking are printed to the console, showing the average response time for read and write operations in milliseconds.
+
+\chapter{Describe clearly how your implementation works.}
+My implementation is composed of the following components:
+\begin{itemize}
+    \item \textbf{VPC}\cite{aws_vpc} : A Virtual Private Cloud (VPC) that provides an isolated network environment for the database cluster.
+    \item \textbf{Public subnet}: A subnet within the VPC that is accessible from the internet. It contains the gatekeeper server and the NAT.
+    \item \textbf{Private subnet}: A subnet within the VPC that is not accessible from the internet. It contains the proxy server and database instances.
+    \item \textbf{NAT gateway}: A Network Address Translation (NAT) gateway that allows instances in the private subnet to access the internet.
+    \item \textbf{Gatekeeper server}: An application running on an EC2 instance\cite{aws_ec2} in the public subnet that 
+    authenticates and validates incoming requests before forwarding them to the proxy server.
+
+    \item \textbf{Proxy server}: An application running on an EC2 instance in the private subnet that routes 
+    incoming database queries to the appropriate database instance (master or worker) based on the type of query (read or write) and the route.
+    
+    \item \textbf{Master database instance}: A MySQL database instance that handles all write operations and 
+    can also handle read operations. It is located on an EC2 instance in the private subnet.
+
+    \item \textbf{2 Worker database instances}: Multiple MySQL database instances that handle read operations only. 
+    They are located on EC2 instances in the private subnet.
+    
+\end{itemize}
+
+The figure~\ref{fig:architecture} illustrates the overall architecture of the implemented database cluster. The solution allows users to 
+perform read and write operations on the database while ensuring security and efficient query routing. if a request is completed
+successfully, it will return in the response body the worker\_ip, the query and the results.
+And if the request fails, it will return an error message with the corresponding status code.
+
+to use the service you should send a post request on the route \\ http://GATEKEEPER\_PUBLIC\_IP:8000/{route} with a json payload like this:
+\begin{lstlisting}[language=bash, frame=single]
+    {
+        "auth_key": "tp3-log8415e",
+        "query": "SELECT * FROM actor LIMIT 5;"
+    }
+\end{lstlisting}
+Where \texttt{\{route\}} can be \texttt{directHit}, \texttt{randomHit} or \texttt{customHit} depending on the desired routing strategy.
+To run the services on the gatekeeper and the proxy we use \texttt{uvicorn}\cite{uvicorn2024}.
+
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\textwidth]{images/architecture.png}
+    \caption{Architecture.}
+    \label{fig:architecture}
+\end{figure}
+
+\chapter{Summary of results }
+The benchmarking results of the implemented database cluster are shown 
+in figure~\ref{fig:benchmarking_results}. The results indicate that the read operations provide the best performance, 
+with a response time between \textbf{5.71 ms per request} and \textbf{5.91 ms per request}.
+Write operations have a higher response time, ranging from \textbf{11.71 ms per request} to \textbf{11.90 ms per request}.
+
+Also the figure~\ref{fig:cpu_utilization} shows the CPU utilization of the proxy server during the benchmarking process. 
+It shows that the proxy has the highest CPU utilization which i expected because it does more processing than any other instance.
+And the Gatekeeper has the lowest CPU utilization since it only authenticate and validate the requests before forwarding them to the proxy.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1.0\textwidth]{images/cpu_utilization_when_benchmarking.png}
+    \caption{CPU utilization when benchmarking.}
+    \label{fig:cpu_utilization}
+\end{figure}
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\textwidth]{images/benchmarking_results.png}
+    \caption{Benchmarking results.}
+    \label{fig:benchmarking_results}
+\end{figure}
+\chapter{Instructions to run your code}
+Instructions to run the project code are provided in the project \texttt{README.md} file. Please refer to the \texttt{README.md} for detailed setup and execution steps.
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

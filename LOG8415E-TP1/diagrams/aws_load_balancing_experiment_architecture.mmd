@@ -1,0 +1,43 @@
+flowchart TD
+    subgraph CustomLoadBalancer
+        LB["Express.js Load Balancer<br>(EC2 Instance)"]
+        R1["Route: /micro"]
+        R2["Route: /large"]
+    end
+
+    subgraph ClusterMicro["Cluster 1: t2.micro"]
+        L1["EC2 t2.micro #1<br>FastAPI"]
+        L2["EC2 t2.micro #2<br>FastAPI"]
+        L3["EC2 t2.micro #3<br>FastAPI"]
+        L4["EC2 t2.micro #4<br>FastAPI"]
+    end
+
+    subgraph ClusterLarge["Cluster 2: t2.large"]
+        M1["EC2 t2.large #1<br>FastAPI"]
+        M2["EC2 t2.large #2<br>FastAPI"]
+        M3["EC2 t2.large #3<br>FastAPI"]
+        M4["EC2 t2.large #4<br>FastAPI"]
+    end
+
+    subgraph CloudWatch
+        CW["CloudWatch<br>"]
+    end
+
+    LB <-- Route based on latency --> R1
+    LB <-- Route based on latency --> R2
+    R1 --> L1
+    R1 --> L2
+    R1 --> L3
+    R1 --> L4
+    R2 --> M1
+    R2 --> M2
+    R2 --> M3
+    R2 --> M4
+    L1 <-- Monitoring --> CW
+    L2 <-- Monitoring --> CW
+    L3 <-- Monitoring --> CW
+    L4 <-- Monitoring --> CW
+    M1 <-- Monitoring --> CW
+    M2 <-- Monitoring --> CW
+    M3 -- Monitoring --> CW
+    M4 -- Monitoring --> CW

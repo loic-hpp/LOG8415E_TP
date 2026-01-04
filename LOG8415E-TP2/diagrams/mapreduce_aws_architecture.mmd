@@ -1,0 +1,67 @@
+graph LR
+	subgraph User
+		Client["Client (reads config & data input)"]
+        InfrastructureDeployer["Infrastructure Provisioner (infrastructure_provisioning_service)"]
+	end
+
+    Client -->|"#1.1.1 deploy_and_get_config (aws_config, mapreduce_config)"| InfrastructureDeployer
+    InfrastructureDeployer -->|"#1.1.2 Provision infrastructure"| AWS
+    AWS -->|"#1.1.3 Returns MapReduce services endpoints"| InfrastructureDeployer
+    InfrastructureDeployer -->|"#1.1.4 Returns MapReduce services endpoints"| Client
+
+	subgraph AWS
+		direction TB
+		Orchestrator["Orchestrator (orchestrator_service)"]
+
+		subgraph Mappers["Mappers (N) (mapper_service)"]
+			direction LR
+			M1["Mapper 1"]
+			Mx["Mapper N"]
+		end
+
+		Partitioner["Partitioner (partitioner_service)"]
+
+		subgraph Reducers["Reducers (R) (reducer_service)"]
+			direction LR
+			R1["Reducer 1"]
+			Ry["Reducer R"]
+		end
+	end
+
+	%% Flows
+	Client -->|"#2.1.1 POST job (data input, endpoints)"| Orchestrator
+
+	Orchestrator -->|"#3.1.1 POST /map"| M1
+	Orchestrator -->|"#3.2.1 POST /map"| Mx
+
+	M1 -->|"#3.1.2 Mapped key/value list"| Orchestrator
+	Mx -->|"#3.2.2 Mapped key/value list"| Orchestrator
+
+	Orchestrator -->|"#4.1.1 POST /partition"| Partitioner
+    Partitioner -->|"#4.1.2 Returns sorted list"| Orchestrator
+	
+    Orchestrator -->|"#5.1.1 POST /reduce"| R1
+    Orchestrator -->|"#5.2.1 POST /reduce"| Ry
+	R1 -->|"#5.1.2 Reduced outputs"| Orchestrator
+	Ry -->|"#5.2.2 Reduced outputs"| Orchestrator
+
+	Orchestrator -->|"#6.1.1 Aggregate and return job results"| Client
+
+	%% Notes (visual styling)
+	classDef client fill:#D6E9FF,stroke:#1F78B4,stroke-width:1px;
+	classDef deployer fill:#E6FFFA,stroke:#17A2B8,stroke-width:1px;
+	classDef orchestrator fill:#FFF3CD,stroke:#FFC107,stroke-width:1px;
+	classDef mapper fill:#E6FFED,stroke:#28A745,stroke-width:1px;
+	classDef partitioner fill:#F0E6FF,stroke:#6F42C1,stroke-width:1px;
+	classDef reducer fill:#FFF5E6,stroke:#FF7F11,stroke-width:1px;
+	classDef storage fill:#F0F0F0,stroke:#6C757D,stroke-width:1px;
+
+	%% Assign classes to nodes
+	class Client client;
+	class InfrastructureDeployer deployer;
+	class Orchestrator orchestrator;
+	class M1,Mx mapper;
+	class Partitioner partitioner;
+	class R1,Ry reducer;
+	class OutputStorage storage;
+

@@ -1,0 +1,7 @@
+{
+  "algorithm": "friendrec",
+  "input_file": "dataset.txt",
+  "num_reducers": 3,
+  "num_mappers": 3,
+  "verbose": false
+}

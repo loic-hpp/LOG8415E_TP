@@ -1,0 +1,231 @@
+\documentclass[a4paper,11pt]{report}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{geometry}
+\geometry{margin=1in}
+\usepackage{pdflscape}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\usepackage{listings}
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true
+}
+
+\usepackage{titling}
+\pretitle{%
+    \begin{center}
+    \includegraphics[width=0.7\textwidth]{images/Logo_Polytechnique_Montréal.png}\\[\bigskipamount]
+    \vspace*{1cm}
+}
+\posttitle{\end{center}}
+\title{
+\Large LOG8415E -- Advanced Concepts of Cloud Computing\\[1.5ex]
+\large Assignment \#1\\[1.5ex]
+\large \textbf{Load Balancer From Scratch}
+\vspace*{2cm}
+}
+\author{
+Alexis Desforges - 2146454\\
+Samy Labassi - 1953898\\
+Louis Lalonde - 2335476\\
+Loic Nguemegne Temena - 2180845
+\vspace*{1cm}\\[2ex]
+\vspace*{0.25cm}
+Submitted to\\
+Vahid Majdinasab
+\vspace*{4cm}
+}
+\date{Fall 2025 -- 23 september 2025}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+
+\chapter{Experiment architecture}
+
+In figure~\ref{fig:architecture}, we depict the architecture used for our AWS load balancing benchmarking experiment.
+\section{Architecture Overview}
+
+Incoming requests are received by a custom load balancer running on an EC2 instance \cite{aws_ec2}, which acts as a reverse proxy. For each request, the load balancer selects the EC2 instance with the lowest latency within the target cluster and forwards the traffic to it. Requests are only routed to one cluster at a time, based on the chosen endpoint.
+
+\subsection{Target Groups and EC2 Instances}
+
+Target Group 1 contains several EC2 instances of type \texttt{t2.micro} running a FastAPI service \cite{fastapi2021}, intended for lighter workloads in the benchmark. Target Group 2 contains several EC2 instances of type \texttt{t2.large} running the same FastAPI service, enabling side-by-side comparison of performance across instance sizes.
+
+\subsection{Monitoring and Metrics}
+
+Both the custom load balancer and the EC2 instances publish metrics to Amazon CloudWatch \cite{aws_cloudwatch}, where dashboards and alarms track request counts, latency, errors, healthy host counts, and resource utilization. CloudWatch reports custom load balancer metrics at 1-minute intervals while traffic is flowing \cite{aws_cloudwatch_lb}, enabling verification of system behavior during each benchmark run.
+
+\begin{landscape}
+\begin{figure}
+    \centering
+    \includegraphics[width=1.6\textwidth]{images/log8415e_assignment_1_architecture.png}
+    \caption{AWS Load balancing benchmark architecture.}
+    \label{fig:architecture}
+\end{figure}
+\thispagestyle{fancy}
+\end{landscape}
+
+% --- Fin de la section FastAPI Deployment Procedure ---
+
+\chapter{EC2 Clusters Setup}
+
+\section{Automated Deployment with Deployment Script}
+
+The following procedure is implemented in \texttt{TP1.py} to automate the setup of two EC2 clusters and configure an EC2 instance which act as a custom load balancer with path-based routing:
+
+\begin{enumerate}
+    \item \textbf{Add Inbound Rule for Security Group:} (\texttt{create\_my\_ip\_inbound\_sg\_rule(sg\_id)})
+    \begin{itemize}
+        \item Adds an inbound rule to the project security group allowing all traffic from the caller's current public IP address.
+        \item When AWS creates a default VPC for an account in a region, it also creates a default security group for that VPC.
+    \end{itemize}
+    \item \textbf{Create EC2 Instances:} (\texttt{create\_t2\_micro\_instances(sg\_id)}, \texttt{create\_t2\_large\_instances(sg\_id)})
+    \begin{itemize}
+        \item Launches 4 \texttt{t2.micro} instances for Cluster 1, each running \texttt{main\_cluster1.py}.
+        \item Launches 4 \texttt{t2.large} instances for Cluster 2, each running \texttt{main\_cluster2.py}.
+        \item Each instance is provisioned in a specific subnet, automatically created with the account's VPC, and tagged for identification.
+        \item A startup script is injected to automatically launch the FastAPI app on boot.
+    \end{itemize}
+    \item \textbf{Create Custom Load Balancer:} (\texttt{create\_load\_balancer()})
+    \begin{itemize}
+        \item Deploys and creates the custom load balancer in an EC2 instance attached to the specified security group. The load balancer listens on port 8000 with a default fixed 404 response.
+    \end{itemize}
+    \item \textbf{Wait for Instances:} (\texttt{wait\_for\_instances()})
+    \begin{itemize}
+        \item The script waits until all EC2 instances are in the \texttt{running} state and retrieves their public DNS names.
+    \end{itemize}
+    \item \textbf{Initialize Load Balancer Instance:} (\texttt{init\_load\_balancer(public\_dns)})
+    \begin{itemize}
+        \item Copies the load balancer source files to the EC2 instance using \texttt{scp}.
+        \item Connects to the instance via SSH, sets execute permissions on the bootstrap script, and runs it to install dependencies and launch the load balancer application.
+    \end{itemize}
+    \item \textbf{Initialize Cluster Instances:} (\texttt{init\_cluster(instances, cluster\_name)})
+    \begin{itemize}
+        \item For each EC2 instance in a cluster, securely copies the FastAPI application files and bootstrap script to the instance.
+        \item Connects via SSH, sets execute permissions, and runs the bootstrap script to install dependencies and launch the FastAPI web API.
+        \item The deployed FastAPI application exposes endpoints for health checks and request handling, logging each request with the instance and cluster information.
+    \end{itemize}
+\end{enumerate}
+
+\chapter{FastAPI Deployment Procedure}
+
+% --- Début de la section FastAPI Deployment Procedure ---
+Each EC2 virtual machine instance in our deployment is provisioned using an official Amazon Linux AMI. After instance creation, our deployment script (\texttt{TP1.py}) copies the FastAPI application code and a bootstrap script to each instance. The bootstrap script is then executed remotely via SSH to automate the setup and launch of the FastAPI application using Uvicorn as the ASGI server \cite{uvicorn2024}.
+
+\section{Automated Deployment with Bootstrap Script}
+
+The deployment process for each EC2 instance is as follows:
+\begin{enumerate}
+    \item \textbf{Copy Application Files:} The script copies the \texttt{app/} directory (containing the FastAPI code and \texttt{bootstrap.sh}) to the EC2 instance using \texttt{scp}.
+    \item \textbf{Install Dependencies:} The bootstrap script installs Python 3 and pip, then installs FastAPI and Uvicorn using pip.
+    \item \textbf{Set Environment Variables:} The script sets the \texttt{INSTANCE\_ID} and \texttt{CLUSTER\_NAME} environment variables for the running process.
+    \item \textbf{Launch FastAPI Application:} The bootstrap script starts the FastAPI application with Uvicorn as the \texttt{ec2-user}, binding to all interfaces on port 8000. Logs are redirected to \texttt{uvicorn.log}.
+\end{enumerate}
+
+The relevant part of the bootstrap script is:
+\begin{lstlisting}[language=bash]
+#!/bin/bash
+
+sudo yum update -y
+sudo yum install python3 python3-pip -y
+
+pip3 install fastapi uvicorn
+
+cd /home/ec2-user/app
+
+export INSTANCE_ID=$1
+export CLUSTER_NAME=$2
+
+sudo -E -u ec2-user INSTANCE_ID="$1" CLUSTER_NAME="$2" \
+  /home/ec2-user/.local/bin/uvicorn main_cluster:app \
+  --host 0.0.0.0 --port 8000 > uvicorn.log 2>&1 &
+\end{lstlisting}
+
+% --- Fin de la section Cluster Setup Using Application Load Balancer ---
+
+\chapter{Custom Load Balancer Setup and Implementation}
+
+\section{Overview}
+
+To provide fine-grained control over request routing and to benchmark custom load balancing strategies, we implemented a custom load balancer as a Node.js application with Express.js running on a dedicated EC2 instance. This load balancer dynamically discovers backend FastAPI instances in each cluster and forwards incoming requests to the optimal instance based on real-time health and response time checks.
+
+\section{Deployment Procedure}
+
+The deployment of the custom load balancer is automated in the \texttt{TP1.py} script via the \texttt{init\_load\_balancer} function. The steps are as follows:
+\begin{enumerate}
+    \item \textbf{File Transfer:} The load balancer source code (Node.js project) is securely copied to the EC2 instance using \texttt{scp}.
+    \item \textbf{Remote Setup:} The script connects to the instance via SSH and executes a bootstrap script to:
+    \begin{itemize}
+        \item Update system packages.
+        \item Install Node.js (using NVM).
+        \item Install project dependencies with \texttt{npm install}.
+        \item Launch the load balancer as a background process.
+    \end{itemize}
+\end{enumerate}
+
+\section{Bootstrap Script}
+
+A shell script (\texttt{bootstrap.sh}) is executed on the load balancer instance to automate environment setup and application launch:
+
+\section{Load Balancer Application Code}
+
+The core of the custom load balancer is implemented in \texttt{index.js}. Its main features are:
+\begin{itemize}
+    \item \textbf{Dynamic Discovery:} Uses AWS SDK to list all running EC2 instances tagged for each cluster.
+    \item \textbf{Health and Latency Checks:} Periodically probes each backend instance to determine the healthiest and fastest target.
+    \item \textbf{Request Forwarding:} Forwards incoming HTTP requests to the best backend instance for each cluster.
+    \item \textbf{Express Server:} Exposes endpoints (\texttt{/cluster1}, \texttt{/cluster2}) for routing client requests.
+\end{itemize}
+
+\chapter{Benchmark Results}
+
+% --- Début de la section Benchmark Results ---
+In this section, we analyze the outcomes of our load balancing benchmark tests performed on the FastAPI application deployed across different EC2 cluster configurations. The primary objective of these benchmarks is to assess how the application responds to varying levels of simulated user load.
+
+\section{Benchmark Methodology}
+To test the response times and throughput of our FastAPI application, we utilized the \texttt{benchmark\_cluster.py} script. This script simulates concurrent user requests to the application endpoints hosted on two distinct clusters: one consisting of \texttt{t2.micro} instances and the other of \texttt{t2.large} instances. Each cluster was accessed via the Application Load Balancer (ALB) using path-based routing. The benchmarking process involved the following steps:
+\begin{enumerate}
+    \item \textbf{Load Simulation:} The script generated a specified number of concurrent requests (one thousand) to the application endpoints, simulating real-world user traffic.
+    \item \textbf{Data Collection:} For each request, the script recorded the response time and status code, allowing us to evaluate both performance and reliability. We can also monitor the CPU usage of each instance during the benchmark using CloudWatch metrics.
+    \item \textbf{Analysis:} The collected data was analyzed to determine average response times, error rates, and throughput for each cluster configuration.
+    \item \textbf{Comparison:} Finally, we compared the performance metrics between the two clusters to understand the impact of instance type on application responsiveness under load.
+    \item \textbf{Results Logging:} The results of the benchmarks were logged into separate files for each cluster configuration, enabling detailed post-benchmark analysis.
+\end{enumerate}
+
+
+\section{Results Overview}
+The benchmarking results clearly show that the \texttt{t2.large} cluster (0.8s/1000 requests) outperformed the \texttt{t2.micro} cluster (0.9s/1000 requests) in both response time and throughput. All requests to both clusters received HTTP 200 responses, confirming the reliability and correctness of the deployment. However, the \texttt{t2.large} instances were able to process requests more quickly and efficiently, maintaining lower latency even as the simulated load increased.
+
+This performance difference highlights the significant impact that EC2 instance type has on application responsiveness and scalability. While both clusters were stable under load, the larger instance type consistently delivered better results, making it more suitable for high-demand scenarios.
+\begin{landscape}
+\begin{figure}
+    \centering
+    \includegraphics[width=1.5\textwidth]{images/cpu_usage_benchmark.png}
+    \caption{CPU usage benchmark results for the load balancer, the t2.micro instances and t2.large instances.}
+    \label{fig:response_time}
+\end{figure}
+\end{landscape}
+The CPU usage remained below 10 percent for all instances, we can notice that the load balancer had the highest CPU usage, which is expected since it handles all incoming requests and distributes them to the backend instances (figure \ref{fig:response_time}). The t2.large instances had a slightly higher CPU usage compared to the t2.micro instances, which is also expected due to their higher processing capabilities. 
+% --- Fin de la section Benchmark Results ---
+\chapter{Instructions to Run the Code}
+
+Instructions to run the project code are provided in the project \texttt{README.md} file. Please refer to the \texttt{README.md} for detailed setup and execution steps.
+
+% --- Fin de la section Instructions to Run the Code ---
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

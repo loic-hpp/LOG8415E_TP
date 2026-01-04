@@ -1,0 +1,10 @@
+tp3-venv/
+app/__pycache__/
+__pycache__/
+latex-report-template/*
+!latex-report-template/src/
+latex-report-template/src/*
+!latex-report-template/src/report.tex
+!latex-report-template/src/images/
+!latex-report-template/src/references.bib
+
